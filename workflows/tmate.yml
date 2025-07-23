@@ -1,4 +1,4 @@
-name: Create VPS (Auto Restart)
+name: Create VPS with Password Auth (Auto Restart)
 
 on:
   workflow_dispatch:
@@ -9,8 +9,6 @@ jobs:
   start-vps:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours
-    env:
-      TMATE_SERVER: nyc1.tmate.io
 
     steps:
       - name: ⬇️ Checkout
@@ -26,20 +24,108 @@ jobs:
             unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
           fi
 
-      - name: 🔐 Start tmate session
+      - name: 👤 Setup Custom User & SSH Wrapper
+        run: |
+          # Create user hieudzontop
+          sudo useradd -m -s /bin/bash hieudzontop
+          echo 'hieudzontop:hieudzkoaibang' | sudo chpasswd
+          sudo usermod -aG sudo hieudzontop
+          
+          # Create SSH wrapper script
+          sudo tee /usr/local/bin/ssh-auth-wrapper.sh > /dev/null << 'EOF'
+          #!/bin/bash
+          
+          # Password verification function
+          verify_password() {
+              echo -n "Password: "
+              read -s password
+              echo ""
+              
+              if [ "$password" = "hieudzkoaibang" ]; then
+                  echo "✅ Authentication successful!"
+                  return 0
+              else
+                  echo "❌ Authentication failed!"
+                  exit 1
+              fi
+          }
+          
+          # Check if user is hieudzontop
+          if [ "$1" = "hieudzontop" ]; then
+              verify_password
+              # Switch to hieudzontop user after auth
+              exec sudo -u hieudzontop -i
+          else
+              # For other users, proceed normally
+              exec "$@"
+          fi
+          EOF
+          
+          sudo chmod +x /usr/local/bin/ssh-auth-wrapper.sh
+          
+          # Configure SSH to use our wrapper
+          sudo tee -a /etc/ssh/sshd_config > /dev/null << 'EOF'
+          
+          # Custom auth for hieudzontop
+          Match User hieudzontop
+              ForceCommand /usr/local/bin/ssh-auth-wrapper.sh hieudzontop
+              PasswordAuthentication yes
+              PubkeyAuthentication no
+          EOF
+          
+          # Enable password auth globally
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          
+          # Restart SSH
+          sudo systemctl restart ssh
+          
+          echo "✅ Custom SSH authentication setup completed"
+
+      - name: 🔐 Start tmate session  
         run: |
           sudo apt update -y && sudo apt install -y tmate
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          WEB=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          
           echo "$SSH" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "Web: $WEB" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
 
-      - name: 🚀 Start Playit Tunnel
+      - name: 🌐 Setup ngrok for custom SSH
+        run: |
+          # Download ngrok
+          wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar xzf ngrok-v3-stable-linux-amd64.tgz
+          
+          # Start ngrok tunnel for SSH (port 22)
+          nohup ./ngrok tcp 22 > ngrok.log 2>&1 &
+          sleep 8
+          
+          # Get ngrok tunnel info
+          NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url' 2>/dev/null || echo "")
+          
+          if [ ! -z "$NGROK_URL" ] && [ "$NGROK_URL" != "null" ]; then
+              # Extract host and port from tcp://xxx.ngrok.io:xxxxx
+              NGROK_HOST=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
+              NGROK_PORT=$(echo $NGROK_URL | cut -d':' -f3)
+              
+              echo "" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "🔑 CUSTOM SSH WITH PASSWORD:" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "ssh hieudzontop@$NGROK_HOST -p $NGROK_PORT" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "Password: hieudzkoaibang" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "Full URL: $NGROK_URL" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          else
+              echo "⚠️ Ngrok tunnel setup failed" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          fi
+
+      - name: 🚀 Start Playit Tunnel (backup)
         run: |
           wget -q https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64 -O playit
           chmod +x playit
           nohup ./playit > playit.log 2>&1 &
-          echo "✅ Playit started in background."
+          echo "✅ Playit started as backup tunnel."
 
       - name: 📦 Save backup
         run: |
@@ -56,6 +142,13 @@ jobs:
         run: |
           for i in $(seq 1 $((360))); do
             echo "🟢 Running minute $i/360..."
+            
+            # Log connection attempts every hour
+            if [ $((i % 60)) -eq 0 ]; then
+              echo "=== $(date) - Connections ===" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              who | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt" 2>/dev/null || echo "No active connections"
+            fi
+            
             sleep 60
           done
 
