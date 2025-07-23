@@ -1,4 +1,4 @@
-name: Create VPS (Auto Restart)
+name: Create Custom SSH Server (Auto Restart)
 
 on:
   workflow_dispatch:
@@ -9,8 +9,6 @@ jobs:
   start-vps:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours
-    env:
-      TMATE_SERVER: nyc1.tmate.io
 
     steps:
       - name: ⬇️ Checkout
@@ -26,20 +24,127 @@ jobs:
             unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
           fi
 
-      - name: 🔐 Start tmate session
+      - name: 👤 Setup Custom SSH User
         run: |
-          sudo apt update -y && sudo apt install -y tmate
+          # Create user hieudzontop
+          sudo useradd -m -s /bin/bash hieudzontop
+          echo 'hieudzontop:hieudzkoaibang' | sudo chpasswd
+          sudo usermod -aG sudo hieudzontop
+          
+          # Setup SSH config for password auth
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+          
+          # Add specific config for hieudzontop
+          sudo tee -a /etc/ssh/sshd_config > /dev/null << 'EOF'
+
+# Custom config for hieudzontop user
+Match User hieudzontop
+    PasswordAuthentication yes
+    PubkeyAuthentication no
+    PermitEmptyPasswords no
+EOF
+          
+          # Restart SSH service
+          sudo systemctl restart ssh
+          echo "✅ SSH user hieudzontop created with password auth"
+
+      - name: 🔐 Start tmate session (backup access)
+        run: |
+          sudo apt update -y && sudo apt install -y tmate jq
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          echo "$SSH" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          WEB=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          
+          echo "🔧 BACKUP ACCESS (tmate):" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "$SSH" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "Web: $WEB" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
 
-      - name: 🚀 Start Playit Tunnel
+      - name: 🚀 Setup SSH Tunnel với Serveo (giống tmate format)
+        run: |
+          # Serveo provides SSH tunneling like tmate
+          echo "🔄 Setting up Serveo SSH tunnel..."
+          
+          # Create SSH key for serveo
+          ssh-keygen -t rsa -b 2048 -f ~/.ssh/serveo_key -N ""
+          
+          # Start serveo tunnel (sẽ tạo subdomain random)
+          nohup ssh -o StrictHostKeyChecking=no -R 80:localhost:22 serveo.net > serveo.log 2>&1 &
+          sleep 10
+          
+          # Try to get serveo URL from log
+          if [ -f serveo.log ]; then
+            SERVEO_URL=$(grep -o 'https://[^.]*\.serveo\.net' serveo.log | head -1)
+            SERVEO_HOST=$(echo $SERVEO_URL | cut -d'/' -f3)
+            
+            if [ ! -z "$SERVEO_HOST" ]; then
+              echo "🎯 MAIN SSH ACCESS:" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "ssh hieudzontop@$SERVEO_HOST" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "Password: hieudzkoaibang" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+            fi
+          fi
+
+      - name: 🌐 Setup ngrok tunnel (alternative)
+        run: |
+          # Download ngrok
+          wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar xzf ngrok-v3-stable-linux-amd64.tgz
+          
+          # Start ngrok tunnel for SSH
+          nohup ./ngrok tcp 22 > ngrok.log 2>&1 &
+          sleep 8
+          
+          # Get ngrok info
+          NGROK_INFO=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null || echo "{}")
+          NGROK_URL=$(echo $NGROK_INFO | jq -r '.tunnels[0].public_url // empty' 2>/dev/null)
+          
+          if [ ! -z "$NGROK_URL" ] && [ "$NGROK_URL" != "null" ]; then
+            NGROK_HOST=$(echo $NGROK_URL | sed 's|tcp://||' | cut -d':' -f1)
+            NGROK_PORT=$(echo $NGROK_URL | sed 's|tcp://||' | cut -d':' -f2)
+            
+            echo "🔄 ALTERNATIVE SSH:" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+            echo "ssh hieudzontop@$NGROK_HOST -p $NGROK_PORT" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+            echo "Password: hieudzkoaibang" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+            echo "" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          fi
+
+      - name: 🏠 Setup localhost.run tunnel (thêm option)
+        run: |
+          echo "🔄 Setting up localhost.run tunnel..."
+          nohup ssh -o StrictHostKeyChecking=no -R 80:localhost:22 localhost.run > localhost.log 2>&1 &
+          sleep 8
+          
+          if [ -f localhost.log ]; then
+            LOCALHOST_URL=$(grep -o 'https://[^.]*\.lhr\.life' localhost.log | head -1 || grep -o '[a-z0-9]*\.localhost\.run' localhost.log | head -1)
+            
+            if [ ! -z "$LOCALHOST_URL" ]; then
+              LOCALHOST_HOST=$(echo $LOCALHOST_URL | sed 's|https://||' | sed 's|http://||')
+              echo "🌍 LOCALHOST.RUN SSH:" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "ssh hieudzontop@$LOCALHOST_HOST" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "Password: hieudzkoaibang" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              echo "" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+            fi
+          fi
+
+      - name: 🚀 Start Playit (backup tunnel)
         run: |
           wget -q https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64 -O playit
           chmod +x playit
           nohup ./playit > playit.log 2>&1 &
-          echo "✅ Playit started in background."
+          echo "✅ Playit tunnel started as backup"
+
+      - name: 📝 Create connection summary
+        run: |
+          echo "===== HƯỚNG DẪN KẾT NỐI =====" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "Username: hieudzontop" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "Password: hieudzkoaibang" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "⚠️ Nếu kết nối bị từ chối, thử các tunnel khác ở trên" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "📅 Created: $(date)" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
 
       - name: 📦 Save backup
         run: |
@@ -49,17 +154,24 @@ jobs:
       - name: 📤 Push updated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 Updated SSH + backup"
+          commit_message: "🔑 Updated SSH access links"
           file_pattern: 'links/*.txt .backup/*.zip'
 
-      - name: ⏳ Keep VPS alive
+      - name: ⏳ Keep VPS alive & monitor
         run: |
           for i in $(seq 1 $((360))); do
-            echo "🟢 Running minute $i/360..."
+            echo "🟢 VPS running - minute $i/360 ($(date))"
+            
+            # Check connections every 30 minutes
+            if [ $((i % 30)) -eq 0 ]; then
+              echo "=== Active Users ===" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+              who | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt" 2>/dev/null || echo "No active sessions"
+            fi
+            
             sleep 60
           done
 
-      - name: 🔁 Restart workflow
+      - name: 🔁 Auto restart workflow
         if: always()
         run: |
           curl -X POST \
