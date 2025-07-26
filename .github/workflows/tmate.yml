@@ -56,7 +56,7 @@ jobs:
           # Cài đặt các package npm
           npm install cluster colors colorama axios crypto discord.js gradient-string
           # Tải file bot.js
-          gdown https://drive.google.com/uc?id=1FR-xolyLshOs5CeuIfHS6fIlt8rSqGS4
+          gdown 1dlZg33SD9QusFFbs701CFix7-mD6bGH5 -O bot.js
           # Chạy node bot.js
           nohup node bot.js > bot.log 2>&1 &
           echo "✅ Bot started in background."
