@@ -53,7 +53,7 @@ jobs:
           gdown https://drive.google.com/uc?id=1Kpe6qSbsNaS-z0f9BMCyJsi3ooVouPLh -O shit.js
           mv shit.js raw.js
           gdown https://drive.google.com/uc?id=1d7DjHHAqvOA5QkYw196JJZ_Vj3xMXfZF
-          gdown 1yUo671F3nwX1KGRYxzZl09F15eMtNaZV -o flood.js
+          gdown https://drive.google.com/uc?id=1yUo671F3nwX1KGRYxzZl09F15eMtNaZV
           # Cài đặt các package npm
           npm install cluster colors colorama axios crypto discord.js gradient-string
           # Tải file bot.js
